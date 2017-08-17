@@ -10,7 +10,8 @@ module DataPath(
 	preg_lbid0, preg_lbid1, preg_lbidw,
 	preg_ofs0, preg_ofs1, preg_ofsw,
 	preg_we,
-	mmu_reqType, mmu_ofs, mmu_lbid, mmu_addr, mmu_invalid);
+	mem_addr, mem_data ,mem_wdata, mem_we,
+	mmu_addr, mmu_ofs, mmu_reqType, mmu_lbid);
 	//
 	input [31:0] instr0;
 	input [31:0] instr1;
@@ -19,8 +20,8 @@ module DataPath(
 	input [31:0] ireg_d0, ireg_d1;
 	input [11:0] preg_lbid0, preg_lbid1;
 	input [15:0] preg_ofs0, preg_ofs1;
+	input [15:0] mem_data;
 	input [15:0] mmu_addr;
-	input        mmu_invalid;
 	//
 	output reg [31:0] alu_d0, alu_d1;
 	output reg [ 3:0] alu_op = 0;
@@ -37,15 +38,18 @@ module DataPath(
 	output reg [11:0] preg_lbidw;
 	output reg [15:0] preg_ofsw;
 	output reg        preg_we;
-	output reg [ 5:0] mmu_reqType;
+	output reg [15:0] mem_addr;
+	output reg [31:0] mem_wdata;
+	output reg 			mem_we;
 	output reg [15:0] mmu_ofs;
+	output reg [5:0] 	mmu_reqType;
 	output reg [11:0] mmu_lbid;
 	//
 	wire [5:0]  instr0_operand0	 = instr0[23:18];
 	wire [5:0]  instr0_operand1	 = instr0[17:12];
 	wire [5:0]  instr0_operand2	 = instr0[11: 6];
 	wire [5:0]  instr0_operand3	 = instr0[ 5: 0];
-	wire [7:0]  instr0_op		 = instr0[31:24];
+	wire [7:0]  instr0_op		 = instr0[31:24];	//OP
 	wire [31:0] instr0_imm16_ext = {{16{instr0[15]}},instr0[15: 0]};
 	wire [15:0] instr0_imm16     = instr0[15: 0];
 	//
@@ -54,44 +58,61 @@ module DataPath(
 
 	//
 	always begin
-		// MMU
+	// memory W
 		case (current_state)
-			`STATE_EXEC_1, `STATE_STORE_0: begin
+			`STATE_EXEC: begin
 				case (instr0_op)
-					`OP_PLIMM : begin
-						mmu_reqType = `LBTYPE_CODE;
-						mmu_ofs = preg_ofsw;
-						mmu_lbid = preg_lbidw;
+					`OP_SMEM: begin
+						mem_addr = mmu_addr;	//渡すアドレス
+						mem_wdata = ireg_d0;	//レジスタの内容
+						mem_we = 1;		//WriteEnable
 					end
-					`OP_PCP : begin
-						mmu_reqType =
-							(preg_p0 == 6'h3f ? `LBTYPE_CODE: `LBTYPE_UNDEFINED);
+					`OP_LMEM: begin
+						mem_addr = mmu_addr;
+					end
+					default: begin
+						mem_addr = 0;
+						mem_wdata = 0;
+						mem_we = 0;
+					end
+				endcase
+			end
+			default: begin
+				mem_addr = 0;
+				mem_wdata = 0;
+				mem_we = 0;
+			end
+		endcase
+		
+		//		MMU
+		case (current_state)
+			`STATE_EXEC: begin
+				case (instr0_op)
+					`OP_SMEM, `OP_LMEM: begin
 						mmu_ofs = preg_ofs0;
+						mmu_reqType = 0;
 						mmu_lbid = preg_lbid0;
 					end
 					default: begin
-						mmu_reqType = 0;
 						mmu_ofs = 0;
+						mmu_reqType = 0;
 						mmu_lbid = 0;
 					end
 				endcase
 			end
 			default: begin
-				mmu_reqType = 0;
 				mmu_ofs = 0;
+				mmu_reqType = 0;
 				mmu_lbid = 0;
 			end
 		endcase
-
 		// ALU
 		case (current_state)
-			`STATE_EXEC_1, `STATE_STORE_0: begin
+			`STATE_EXEC: begin
 				case (instr0_op)
 					`OP_OR, `OP_XOR, `OP_AND, 
-						`OP_ADD, `OP_SUB,
-						`OP_MUL,
-						`OP_SHL, `OP_SAR,
-						`OP_DIV, `OP_MOD
+						`OP_ADD, `OP_SUB, 
+						`OP_SHL, `OP_SAR 
 						: begin
 						alu_d0 = ireg_d0;
 						alu_d1 = ireg_d1;
@@ -145,7 +166,7 @@ module DataPath(
 		endcase
 		// LabelTable write
 		case (current_state)
-			`STATE_STORE_0: begin
+			`STATE_EXEC: begin
 				case (instr0_op)
 					`OP_LBSET: begin
 						lbt_lbidw = instr0_imm16;
@@ -173,14 +194,18 @@ module DataPath(
 		endcase
 		// PReg R
 		case (current_state)
-			`STATE_EXEC_0, `STATE_EXEC_1: begin
+			`STATE_EXEC: begin
 				case (instr0_op)
 					`OP_PADD: begin
 						preg_p0 = instr0_operand0;
 						preg_p1 = 0;
 					end
-					`OP_PADD, `OP_PCP: begin
+					`OP_PADD: begin
 						preg_p0 = instr0_operand2;
+						preg_p1 = 0;
+					end
+					`OP_SMEM, `OP_LMEM: begin
+						preg_p0 = instr0_operand1;
 						preg_p1 = 0;
 					end
 					`OP_PDIF,
@@ -204,7 +229,7 @@ module DataPath(
 		endcase
 		// PReg W
 		case (current_state)
-			`STATE_STORE_0: begin
+			`STATE_EXEC: begin
 				case (instr0_op)
 					`OP_PLIMM: begin
 						preg_pw = instr0_operand0;
@@ -216,12 +241,6 @@ module DataPath(
 						preg_pw = instr0_operand1;
 						preg_lbidw = preg_lbid0;
 						preg_ofsw = alu_dout;
-						preg_we = 1;
-					end
-					`OP_PCP: begin
-						preg_pw = instr0_operand1;
-						preg_lbidw = preg_lbid0;
-						preg_ofsw = preg_ofs0;
 						preg_we = 1;
 					end
 					default: begin
@@ -241,9 +260,9 @@ module DataPath(
 		endcase
 		// IReg R
 		case (current_state)
-			`STATE_EXEC_0, `STATE_EXEC_1: begin
+			`STATE_EXEC: begin
 				case (instr0_op)
-					`OP_PADD, `OP_CND: begin
+					`OP_PADD, `OP_CND, `OP_SMEM: begin
 						ireg_r0 = instr0_operand0;
 						ireg_r1 = 0;
 					end
@@ -252,10 +271,8 @@ module DataPath(
 						ireg_r1 = 0;
 					end
 					`OP_OR, `OP_XOR, `OP_AND, 
-						`OP_ADD, `OP_SUB,
-						`OP_MUL,
+						`OP_ADD, `OP_SUB, 
 						`OP_SHL, `OP_SAR,
-						`OP_DIV, `OP_MOD,
 						`OP_CMPE, `OP_CMPNE, 
 						`OP_CMPL, `OP_CMPGE, 
 						`OP_CMPLE, `OP_CMPG,
@@ -277,7 +294,7 @@ module DataPath(
 		endcase
 		// IReg W
 		case (current_state)
-			`STATE_STORE_0: begin
+			`STATE_EXEC: begin
 				case (instr0_op)
 					`OP_LIMM16: begin
 						ireg_rw = instr0_operand0;
@@ -290,10 +307,8 @@ module DataPath(
 						ireg_we = 1;
 					end
 					`OP_OR, `OP_XOR, `OP_AND, 
-						`OP_ADD, `OP_SUB,
-						`OP_MUL,
+						`OP_ADD, `OP_SUB, 
 						`OP_SHL, `OP_SAR,
-						`OP_DIV, `OP_MOD,
 						//
 						`OP_CMPE, `OP_CMPNE, 
 						`OP_CMPL, `OP_CMPGE, 
@@ -311,6 +326,11 @@ module DataPath(
 					`OP_LIMM32: begin
 						ireg_rw = instr0_operand0;
 						ireg_dw = instr1;
+						ireg_we = 1;
+					end
+					`OP_LMEM: begin
+						ireg_rw = instr0_operand0;
+						ireg_dw = mem_data;
 						ireg_we = 1;
 					end
 					default: begin

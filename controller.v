@@ -1,37 +1,28 @@
 `timescale 1ns / 1ps
 `include "def.v"
 module Controller(clk, reset, 
-	memdata, memaddr, ireg_d0_lsb, 
+	memdata, memaddr, ireg_d0_lsb, mmu_invalid,
 	instr0, instr1, current_state, 
-	cr, pc,
-	pc_update_req, pc_update_addr);
+	cr, pc);
 	//
-	input clk, reset;
-	input [31:0] memdata;
-	input ireg_d0_lsb;
-	input pc_update_req;
-	input [15:0] pc_update_addr;
-	output reg [15:0] memaddr;
-	output reg [31:0] instr0 = 0;
-	output reg [31:0] instr1 = 0;
-	output reg [3:0] current_state = 0;
-	output reg [7:0] cr = 0;
-	output reg [15:0] pc = 0;
+	input clk, reset;							//
+	input [31:0] memdata;					//
+	input ireg_d0_lsb;						//
+	input mmu_invalid;						//1ならMMUからの不正通知
+	
+	output reg [15:0] memaddr;				//参照したいアドレス
+	output reg [31:0] instr0 = 0;			//
+	output reg [31:0] instr1 = 0;			//
+	output reg [3:0] current_state = 0;	//
+	output reg [7:0] cr = 0;				//コントロールレジスタ
+	output reg [15:0] pc = 0;				//プログラムカウンタ
 	//
-	reg		[15:0] pc_next;
-	wire    [ 7:0] cr_next;
-	reg		[ 3:0] next_state;
-	always begin
-		case (current_state)
-			`STATE_FETCH0_0, `STATE_FETCH1_0: pc_next = pc + 1;
-			`STATE_EXEC_0: begin
-				if(pc_update_req) pc_next = pc_update_addr;
-				else pc_next = pc;
-			end
-			default: pc_next = pc;
-		endcase
-		#1;
-	end
+	wire	[15:0] pc_next;
+	wire  [7:0] cr_next;
+	wire	[3:0]	next_state;
+	assign pc_next = (
+		current_state == `STATE_FETCH0 || 
+		current_state == `STATE_FETCH1 ? pc + 1'b1 : pc);
 	//
 	wire [7:0] instr0_op;
 	wire [7:0] next_instr0_op;
@@ -43,13 +34,13 @@ module Controller(clk, reset,
 	assign cr_next = {6'b0, cr_next_skip, cr_next_hlt};
 	always begin
 		// HLT bit
-		if(current_state == `STATE_EXEC_1 && instr0_op == `OP_HLT) begin
+		if((current_state == `STATE_EXEC && instr0_op == `OP_HLT) /*|| mmu_invalid == 1*/) begin
 			cr_next_hlt = 1;
 		end
 		else cr_next_hlt = cr[`BIT_CR_HLT];
 		// SKIP bit
 		case (current_state)
-			`STATE_FETCH0_1: begin
+			`STATE_FETCH0: begin
 				case(next_instr0_op)
 					`OP_LIMM32, `OP_LBSET: begin
 						cr_next_skip = cr[`BIT_CR_SKIP];
@@ -57,94 +48,77 @@ module Controller(clk, reset,
 					default: cr_next_skip = 0;
 				endcase
 			end
-			`STATE_FETCH1_1: begin
+			`STATE_FETCH1: begin
 				cr_next_skip = 0;
 			end
-			`STATE_EXEC_0: begin
-				cr_next_skip = 0;
-			end
-			`STATE_EXEC_1: begin
+			`STATE_EXEC: begin
 				if(instr0_op == `OP_CND && ireg_d0_lsb == 0) begin
 					cr_next_skip = 1;
 				end
 				else cr_next_skip = 0;
 			end
 			default: cr_next_skip = cr[`BIT_CR_SKIP];
-		endcase		#1;
+		endcase
+		#1;
 	end
 	//
 	always begin
 		case (current_state)
-			`STATE_FETCH0_0, `STATE_FETCH0_1:	memaddr <= pc;
-			`STATE_FETCH1_0, `STATE_FETCH1_1:	memaddr <= pc;
-			default:			memaddr <= 0;
+			`STATE_FETCH0:	memaddr = pc;
+			`STATE_FETCH1:	memaddr = pc;
+			default:		memaddr = 0;
 		endcase
 		#1;
 	end
 
-	always @(negedge clk) begin
-		if(reset == 0 && cr[`BIT_CR_HLT] == 0) begin
-			if(current_state == `STATE_FETCH0_1) begin
-				instr0 <= memdata;
-			end
-			if(current_state == `STATE_FETCH1_1) begin
-				instr1 <= memdata;
-			end
-		end
-	end
-
+	//ここのフラグ(genCRNextHLT)が1で動作停止
+	function genCRNextHLT(input [3:0]cstate, input[7:0] op);
+		genCRNextHLT = (cstate == `STATE_EXEC && op == `OP_HLT);
+	endfunction
+	
 	always @(posedge clk) begin
 		if(reset == 1) begin
 			pc = 0;
-			current_state = `STATE_FETCH0_0;
+			current_state = `STATE_FETCH0;
 			cr = 0;
 		end
 		if(reset == 0 && cr[`BIT_CR_HLT] == 0) begin
+			if(current_state == `STATE_FETCH0) begin
+				instr0 = memdata;
+			end
+			if(current_state == `STATE_FETCH1) begin
+				instr1 = memdata;
+			end
 			current_state <= next_state;
 			pc <= pc_next;
 			cr <= cr_next;
 		end
 	end
 	// state transition
-	always begin
-		#1;
-		case (current_state)
-			`STATE_FETCH0_0:
-					next_state = `STATE_FETCH0_1;
-			`STATE_FETCH0_1: begin
+	assign next_state = genNextState(current_state, next_instr0_op);
+	function [3:0] genNextState (
+		input [3:0] currentState, 
+		input [7:0] next_instr0_op);
+		case (currentState)
+			`STATE_FETCH0: begin
 				case(next_instr0_op)
 					`OP_LIMM32, `OP_LBSET: begin
-						next_state = `STATE_FETCH1_0;
+						genNextState = `STATE_FETCH1;
 					end
 					default: begin
-						if(cr[`BIT_CR_SKIP])
-							next_state = `STATE_FETCH0_0;
-						else					
-							next_state = `STATE_EXEC_0;
+						genNextState = 
+							(cr[`BIT_CR_SKIP] == 1 ? `STATE_FETCH0 : `STATE_EXEC);
 					end
 				endcase
 			end
-			`STATE_FETCH1_0:
-					next_state = `STATE_FETCH1_1;
-			`STATE_FETCH1_1: begin
-				if(cr[`BIT_CR_SKIP])
-					next_state = `STATE_FETCH0_0;
-				else
-					next_state = `STATE_EXEC_0;
+			`STATE_FETCH1: begin
+				genNextState = 
+					(cr[`BIT_CR_SKIP] == 1 ? `STATE_FETCH0 : `STATE_EXEC);
 			end
-			`STATE_EXEC_0: begin
-				next_state = `STATE_EXEC_1;
+			`STATE_EXEC: begin
+				genNextState = `STATE_FETCH0;
 			end
-			`STATE_EXEC_1: begin
-				next_state = `STATE_STORE_0;
-			end
-			`STATE_STORE_0: begin
-				next_state = `STATE_STORE_1;
-			end
-			`STATE_STORE_1: begin
-				next_state = `STATE_FETCH0_0;
-			end
-			default: next_state = `STATE_HLT;
+			default: genNextState = `STATE_FETCH0;
 		endcase
-	end
+	endfunction
 endmodule

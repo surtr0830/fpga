@@ -1,51 +1,31 @@
 `timescale 1ns / 1ps
 
-module PointerRegister(clk, 
-	p0, p1, pw, 
-	lbid0, lbid1, lbidw, 
-	ofs0, ofs1, ofsw, 
-	we, pc_update_req);
+module PointerRegister(clk, p0, p1, pw, lbid0, lbid1, lbidw, ofs0, ofs1, ofsw, we);
 	input clk, we;
 	input [5:0] p0, p1, pw;
-	output reg [11:0] lbid0, lbid1;
+	output [11:0] lbid0, lbid1;
 	input [11:0] lbidw;
-	output reg [15:0] ofs0, ofs1;
+	output [15:0] ofs0, ofs1;
 	input [15:0] ofsw;
-	output pc_update_req;
 
-	reg [11:0] lbidfile[63:0];	// 左が要素の幅、右が添字範囲
-	reg [15:0] ofsfile[63:0];
-	
-	wire [5:0] rwp0;
-/*
+	reg [11:0] lbidfile[5:0];	// 左が要素の幅、右がアドレスの幅
+	reg [15:0] ofsfile[5:0];	// 左が要素の幅、右がアドレスの幅
+
 	assign lbid0 = lbidfile[p0];
 	assign lbid1 = lbidfile[p1];
 
 	assign ofs0 = ofsfile[p0];
 	assign ofs1 = ofsfile[p1];
-*/
-	assign pc_update_req = (we == 1 && pw == 6'h3f) ? 1 : 0;
-	// p0 and pw
-	
-	assign rwp0 = (we == 1) ? pw : p0;
-	
+
 	always @ (posedge clk)
 		begin
 			if(we == 1) begin
-				lbidfile[rwp0] <= lbidw;
-				ofsfile[rwp0]  <= ofsw;
-			end
-			else begin
-				lbid0 <= lbidfile[rwp0];
-				ofs0  <= ofsfile[rwp0];
+				lbidfile[pw] = lbidw;
+				ofsfile[pw] = ofsw;
 			end
 		end
-	// p1
-	always @ (posedge clk)
-		begin
-			lbid1 <= lbidfile[p1];
-			ofs1  <= ofsfile[p1];
-		end
+	reg i;
+	
 endmodule
 
 `timescale 1ns / 1ps

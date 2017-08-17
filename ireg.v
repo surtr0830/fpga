@@ -4,27 +4,18 @@ module IntegerRegister(clk, r0, r1, rw, d0, d1, dw, we);
 	input clk, we;
 	input [5:0] r0, r1, rw;
 	input [31:0] dw;
-	output reg [31:0] d0, d1;
-	
-	wire [5:0] rwr0;
-	reg [31:0] iregfile[63:0];	// 左が要素の幅、右が添字範囲
+	output [31:0] d0, d1;
 
-	
-	//r0 and rw
-	assign rwr0 = (we == 1) ? rw : r0;
+	reg [31:0] iregfile[5:0];	// 左が要素の幅、右がアドレスの幅
+
+	assign d0 = iregfile[r0];
+	assign d1 = iregfile[r1];
+
 	always @ (posedge clk)
 		begin
 			if(we == 1) begin
-				iregfile[rwr0] <= dw;
+				iregfile[rw] = dw;
 			end
-			else begin
-				d0 <= iregfile[rwr0];
-			end
-		end
-	// r1 read
-	always @ (posedge clk)
-		begin
-			d1 <= iregfile[r1];
 		end
 endmodule
 

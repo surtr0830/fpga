@@ -7,7 +7,7 @@ module AddrDecoder(reqType, ofs, base, count, lbType, addr, invalid);
 	input [15:0] count;
 	input [5:0] lbType;
 	output [15:0] addr;
-	output invalid;
+	output invalid;	//1のときアドレス不正
 	//
 	assign addr = base + ofs;
 	assign invalid = !(

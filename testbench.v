@@ -43,7 +43,7 @@ module testbench();
 			*/
 			$finish;
 		end
-		if(counter >= 2000) begin
+		if(counter >= 100) begin
 			$display ("aborted due to counter value");
 			$finish;
 		end
